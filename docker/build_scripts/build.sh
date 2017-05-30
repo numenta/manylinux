@@ -48,11 +48,16 @@ rm -f epel-release-6*.rpm
 
 # Development tools and libraries
 yum -y install bzip2 make git patch unzip bison yasm diffutils \
-    automake which file cmake28 \
+    automake which file \
     kernel-devel-`uname -r` \
     devtoolset-2-binutils devtoolset-2-gcc \
     devtoolset-2-gcc-c++ devtoolset-2-gcc-gfortran \
     ${PYTHON_COMPILE_DEPS}
+
+# Install more recent version of cmake
+curl -O https://cmake.org/files/v3.8/cmake-3.8.1-Linux-x86_64.sh
+/bin/sh cmake-3.8.1-Linux-x86_64.sh --prefix=/usr/local --skip-license
+rm cmake-3.8.1-Linux-x86_64.sh
 
 # Install newest autoconf
 build_autoconf $AUTOCONF_ROOT $AUTOCONF_HASH
