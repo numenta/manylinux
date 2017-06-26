@@ -12,6 +12,7 @@ CURL_DOWNLOAD_URL=http://curl.askapache.com/download
 GET_PIP_URL=https://bootstrap.pypa.io/get-pip.py
 
 AUTOCONF_DOWNLOAD_URL=http://ftp.gnu.org/gnu/autoconf
+AUTOMAKE_DOWNLOAD_URL=http://ftp.gnu.org/gnu/automake
 
 
 function check_var {
@@ -66,6 +67,9 @@ function do_cpython_build {
     # NOTE Make libpython shared library visible to python calls below
     local LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${prefix}/lib"
     ${prefix}/bin/python get-pip.py
+    if [ -e ${prefix}/bin/pip3 ] && [ ! -e ${prefix}/bin/pip ]; then
+        ln -s pip3 ${prefix}/bin/pip
+    fi
     ${prefix}/bin/pip install wheel
     local abi_tag=$(${prefix}/bin/python ${MY_DIR}/python-tag-abi-tag.py)
     ln -s ${prefix} /opt/python/${abi_tag}
@@ -94,7 +98,7 @@ function build_cpythons {
     for py_ver in $@; do
         build_cpython $py_ver
     done
-    rm get-pip.py
+    rm -f get-pip.py
 }
 
 
@@ -113,7 +117,7 @@ function check_sha256sum {
 
     echo "${sha256}  ${fname}" > ${fname}.sha256
     sha256sum -c ${fname}.sha256
-    rm ${fname}.sha256
+    rm -f ${fname}.sha256
 }
 
 
@@ -170,4 +174,17 @@ function build_autoconf {
     tar -zxf ${autoconf_fname}.tar.gz
     (cd ${autoconf_fname} && do_standard_install)
     rm -rf ${autoconf_fname} ${autoconf_fname}.tar.gz
+}
+
+function build_automake {
+    local automake_fname=$1
+    check_var ${automake_fname}
+    local automake_sha256=$2
+    check_var ${automake_sha256}
+    check_var ${AUTOMAKE_DOWNLOAD_URL}
+    curl -sLO ${AUTOMAKE_DOWNLOAD_URL}/${automake_fname}.tar.gz
+    check_sha256sum ${automake_fname}.tar.gz ${automake_sha256}
+    tar -zxf ${automake_fname}.tar.gz
+    (cd ${automake_fname} && do_standard_install)
+    rm -rf ${automake_fname} ${automake_fname}.tar.gz
 }
