@@ -8,20 +8,23 @@ set -ex
 # NOTE Only need python 2.7.11 for nupic.core/nupic.bindings at this time, so
 # remove others to expedite build and reduce docker image size. The original
 # manylinux docker image project builds many python versions.
-# NOTE We added back 3.5.1, since auditwheel requires python 3.3+
-CPYTHON_VERSIONS="2.7.11 3.5.1"
+# NOTE We added back 3.5.3, since auditwheel requires python 3.3+
+CPYTHON_VERSIONS="2.7.11 3.5.3"
 
 # openssl version to build, with expected sha256 hash of .tar.gz
 # archive
-OPENSSL_ROOT=openssl-1.0.2h
-OPENSSL_HASH=1d4007e53aad94a5b2002fe045ee7bb0b3d98f1a47f8b2bc851dcd1c74332919
-EPEL_RPM_HASH=e5ed9ecf22d0c4279e92075a64c757ad2b38049bcf5c16c4f2b75d5f6860dc0d
+OPENSSL_ROOT=openssl-1.0.2l
+# Hash from https://www.openssl.org/source/openssl-1.0.2?.tar.gz.sha256
+OPENSSL_HASH=ce07195b659e75f4e1db43552860070061f156a98bb37b672b101ba6e3ddf30c
+EPEL_RPM_HASH=0dcc89f9bf67a2a515bad64569b7a9615edc5e018f676a578d5fd0f17d3c81d4
 DEVTOOLS_HASH=a8ebeb4bed624700f727179e6ef771dafe47651131a00a78b342251415646acc
-PATCHELF_HASH=d9afdff4baeacfbc64861454f368b7f2c15c44d245293f7587bbf726bfe722fb
+PATCHELF_VERSION=6bfcafbba8d89e44f9ac9582493b4f27d9d8c369
 CURL_ROOT=curl-7.49.1
 CURL_HASH=eb63cec4bef692eab9db459033f409533e6d10e20942f4b060b32819e81885f1
 AUTOCONF_ROOT=autoconf-2.69
 AUTOCONF_HASH=954bd69b391edc12d6a4a51a2dd1476543da5c6bbf05a95b59dc0dd6fd4c2969
+AUTOMAKE_ROOT=automake-1.15
+AUTOMAKE_HASH=7946e945a96e28152ba5a6beb0625ca715c6e32ac55f2e353ef54def0c8ed924
 
 # Dependencies for compiling Python that we want to remove from
 # the final image after compiling Python
@@ -30,12 +33,22 @@ PYTHON_COMPILE_DEPS="zlib-devel bzip2-devel ncurses-devel sqlite-devel readline-
 # Libraries that are allowed as part of the manylinux1 profile
 MANYLINUX1_DEPS="glibc-devel libstdc++-devel glib2-devel libX11-devel libXext-devel libXrender-devel  mesa-libGL-devel libICE-devel libSM-devel ncurses-devel"
 
+# Centos 5 is EOL and is no longer available from the usual mirrors, so switch
+# to http://vault.centos.org
+# From: https://github.com/rust-lang/rust/pull/41045
+# The location for version 5 was also removed, so now only the specific release
+# (5.11) can be referenced.
+sed -i 's/enabled=1/enabled=0/' /etc/yum/pluginconf.d/fastestmirror.conf
+sed -i 's/mirrorlist/#mirrorlist/' /etc/yum.repos.d/*.repo
+sed -i 's/#\(baseurl.*\)mirror.centos.org\/centos\/$releasever/\1vault.centos.org\/5.11/' /etc/yum.repos.d/*.repo
+
 # Get build utilities
 MY_DIR=$(dirname "${BASH_SOURCE[0]}")
 source $MY_DIR/build_utils.sh
 
 # EPEL support
 yum -y install wget curl
+# NOTE: The upstream package has since moved this .rpm into the repo
 curl -sLO https://dl.fedoraproject.org/pub/epel/6/x86_64/epel-release-6-8.noarch.rpm
 check_sha256sum epel-release-6-8.noarch.rpm $EPEL_RPM_HASH
 
@@ -58,6 +71,19 @@ yum -y install bzip2 make git patch unzip bison yasm diffutils \
 build_autoconf $AUTOCONF_ROOT $AUTOCONF_HASH
 autoconf --version
 
+# Install newest automake
+build_automake $AUTOMAKE_ROOT $AUTOMAKE_HASH
+automake --version
+
+# Install a more recent SQLite3
+curl -sO https://sqlite.org/2017/sqlite-autoconf-3160200.tar.gz
+tar xfz sqlite-autoconf-3160200.tar.gz
+cd sqlite-autoconf-3160200
+./configure
+make install
+cd ..
+rm -rf sqlite-autoconf-3160200*
+
 # Compile the latest Python releases.
 # (In order to have a proper SSL module, Python is compiled
 # against a recent openssl [see env vars above], which is linked
@@ -66,19 +92,19 @@ build_openssl $OPENSSL_ROOT $OPENSSL_HASH
 mkdir -p /opt/python
 build_cpythons $CPYTHON_VERSIONS
 
-PY35_BIN=/opt/python/cp35-cp35m/bin
+PY36_BIN=/opt/python/cp36-cp36m/bin
 # NOTE Since our custom manylinux image builds pythons with shared
 # libpython, we need to add libpython's dir to LD_LIBRARY_PATH before running
 # python.
 ORIGINAL_LD_LIBRARY_PATH="${LD_LIBRARY_PATH}"
-LD_LIBRARY_PATH="${ORIGINAL_LD_LIBRARY_PATH}:$(dirname ${PY35_BIN})/lib"
+LD_LIBRARY_PATH="${ORIGINAL_LD_LIBRARY_PATH}:$(dirname ${PY36_BIN})/lib"
 
 # Our openssl doesn't know how to find the system CA trust store
 #   (https://github.com/pypa/manylinux/issues/53)
 # And it's not clear how up-to-date that is anyway
 # So let's just use the same one pip and everyone uses
-$PY35_BIN/pip install certifi
-ln -s $($PY35_BIN/python -c 'import certifi; print(certifi.where())') \
+$PY36_BIN/pip install certifi
+ln -s $($PY36_BIN/python -c 'import certifi; print(certifi.where())') \
       /opt/_internal/certs.pem
 # If you modify this line you also have to modify the versions in the
 # Dockerfiles:
@@ -95,15 +121,14 @@ curl-config --features
 rm -rf /usr/local/ssl
 
 # Install patchelf (latest with unreleased bug fixes)
-curl -sLO https://nipy.bic.berkeley.edu/manylinux/patchelf-0.9njs2.tar.gz
-check_sha256sum patchelf-0.9njs2.tar.gz $PATCHELF_HASH
-tar -xzf patchelf-0.9njs2.tar.gz
-(cd patchelf-0.9njs2 && ./configure && make && make install)
-rm -rf patchelf-0.9njs2.tar.gz patchelf-0.9njs2
+curl -sL -o patchelf.tar.gz https://github.com/NixOS/patchelf/archive/$PATCHELF_VERSION.tar.gz
+tar -xzf patchelf.tar.gz
+(cd patchelf-$PATCHELF_VERSION && ./bootstrap.sh && ./configure && make && make install)
+rm -rf patchelf.tar.gz patchelf-$PATCHELF_VERSION
 
 # Install latest pypi release of auditwheel
-$PY35_BIN/pip install auditwheel
-ln -s $PY35_BIN/auditwheel /usr/local/bin/auditwheel
+$PY36_BIN/pip install auditwheel
+ln -s $PY36_BIN/auditwheel /usr/local/bin/auditwheel
 
 # Clean up development headers and other unnecessary stuff for
 # final image
@@ -137,6 +162,9 @@ for PYTHON in /opt/python/*/bin/python; do
     # Make sure that SSL cert checking works
     $PYTHON $MY_DIR/ssl-check.py
 done
+
+# Fix libc headers to remain compatible with C99 compilers.
+find /usr/include/ -type f -exec sed -i 's/\bextern _*inline_*\b/extern __inline __attribute__ ((__gnu_inline__))/g' {} +
 
 # Restore LD_LIBRARY_PATH
 LD_LIBRARY_PATH="${ORIGINAL_LD_LIBRARY_PATH}"
